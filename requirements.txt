@@ -12,3 +12,4 @@ langchain
 langchain-anthropic
 tavily-python
 reportlab
+psycopg2-binary
