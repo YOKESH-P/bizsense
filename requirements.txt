@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+python-dotenv
+sqlalchemy
+pydantic
+email-validator
+python-jose[cryptography]
+passlib[bcrypt]
+bcrypt
+langgraph
+langchain
+langchain-anthropic
+tavily-python
+reportlab

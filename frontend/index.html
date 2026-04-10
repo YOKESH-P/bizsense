@@ -1,0 +1,516 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>BizSense - AI Business Intelligence</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap"
+      rel="stylesheet"
+    />
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script crossorigin src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+    <style>
+      body {
+        font-family: "Inter", system-ui, -apple-system, sans-serif;
+        background:
+          radial-gradient(circle at top left, rgba(59, 130, 246, 0.2), transparent 40%),
+          radial-gradient(circle at bottom right, rgba(14, 116, 144, 0.18), transparent 45%),
+          linear-gradient(140deg, #020617 0%, #0b1f3a 45%, #102947 100%);
+        min-height: 100vh;
+      }
+    </style>
+  </head>
+  <body class="text-slate-900">
+    <div id="root"></div>
+
+    <script type="text/babel">
+      const { useEffect, useMemo, useState } = React;
+      const API_BASE_CANDIDATES = [
+        "http://[::1]:8001",
+        "http://127.0.0.1:8001",
+        "http://localhost:8001",
+        "http://[::1]:8000",
+        "http://127.0.0.1:8000",
+        "http://localhost:8000"
+      ];
+
+      function Icon({ children, className = "w-4 h-4" }) {
+        return (
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.8"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            className={className}
+          >
+            {children}
+          </svg>
+        );
+      }
+
+      function BizSenseApp() {
+        const [view, setView] = useState("login");
+        const [token, setToken] = useState(localStorage.getItem("bizsense_token") || "");
+        const [authForm, setAuthForm] = useState({ name: "", email: "", password: "" });
+        const [analysisTopic, setAnalysisTopic] = useState("");
+        const [reports, setReports] = useState([]);
+        const [activeReport, setActiveReport] = useState(null);
+        const [message, setMessage] = useState("");
+        const [error, setError] = useState("");
+        const [isLoading, setIsLoading] = useState(false);
+        const [agentStage, setAgentStage] = useState("");
+        const [apiBase, setApiBase] = useState("");
+
+        const isAuthenticated = useMemo(() => Boolean(token), [token]);
+
+        useEffect(() => {
+          detectApiBase();
+        }, []);
+
+        useEffect(() => {
+          if (isAuthenticated) {
+            fetchReports();
+            setView("dashboard");
+          }
+        }, [isAuthenticated, apiBase]);
+
+        async function detectApiBase() {
+          for (const base of API_BASE_CANDIDATES) {
+            try {
+              const resp = await fetch(`${base}/health`, { method: "GET", mode: "cors" });
+              if (resp.ok) {
+                setApiBase(base);
+                return;
+              }
+            } catch (err) {}
+          }
+          setError("Backend API not reachable. Start FastAPI and make sure port 8000/8001 is available.");
+        }
+
+        async function request(path, method = "GET", body = null, auth = true) {
+          const headers = { "Content-Type": "application/json" };
+          if (auth && token) headers["Authorization"] = `Bearer ${token}`;
+
+          const fallbackBases = [
+            apiBase,
+            ...API_BASE_CANDIDATES.filter((base) => base !== apiBase)
+          ].filter(Boolean);
+
+          let response = null;
+          let lastError = null;
+
+          for (const base of fallbackBases) {
+            try {
+              response = await fetch(`${base}${path}`, {
+                method,
+                mode: "cors",
+                headers,
+                body: body ? JSON.stringify(body) : undefined
+              });
+              if (base !== apiBase) setApiBase(base);
+              break;
+            } catch (err) {
+              lastError = err;
+            }
+          }
+
+          if (!response) {
+            throw new Error(
+              `Unable to reach backend API. Tried: ${fallbackBases.join(", ")}. Ensure FastAPI is running.`
+            );
+          }
+
+          const data = await response.json().catch(() => ({}));
+          if (!response.ok) {
+            throw new Error(data.detail || data.message || "Request failed");
+          }
+          return data;
+        }
+
+        async function handleSignup(e) {
+          e.preventDefault();
+          setIsLoading(true);
+          setError("");
+          setMessage("");
+          try {
+            await request("/auth/signup", "POST", authForm, false);
+            setMessage("Signup successful. Please login.");
+            setView("login");
+          } catch (err) {
+            setError(err.message);
+          } finally {
+            setIsLoading(false);
+          }
+        }
+
+        async function handleLogin(e) {
+          e.preventDefault();
+          setIsLoading(true);
+          setError("");
+          setMessage("");
+          try {
+            const data = await request(
+              "/auth/login",
+              "POST",
+              { email: authForm.email, password: authForm.password },
+              false
+            );
+            localStorage.setItem("bizsense_token", data.access_token);
+            setToken(data.access_token);
+            setMessage("Welcome to BizSense.");
+          } catch (err) {
+            setError(err.message);
+          } finally {
+            setIsLoading(false);
+          }
+        }
+
+        async function fetchReports() {
+          try {
+            const data = await request("/reports");
+            setReports(data);
+          } catch (err) {
+            setError(err.message);
+          }
+        }
+
+        async function runAnalysis(e) {
+          e.preventDefault();
+          if (!analysisTopic.trim()) return;
+
+          setIsLoading(true);
+          setError("");
+          setMessage("");
+          setAgentStage("Orchestrator Agent planning...");
+          try {
+            const stages = [
+              "Orchestrator Agent planning...",
+              "Research Agent collecting market signals...",
+              "Analysis Agent building SWOT and competitive insights...",
+              "Report Agent composing final report..."
+            ];
+            let i = 0;
+            const interval = setInterval(() => {
+              i = Math.min(i + 1, stages.length - 1);
+              setAgentStage(stages[i]);
+            }, 1500);
+
+            const data = await request("/analyze", "POST", { topic: analysisTopic });
+            clearInterval(interval);
+            setAgentStage("");
+            setMessage("Analysis completed successfully.");
+            await fetchReports();
+            await openReport(data.report_id);
+            setView("report");
+            setAnalysisTopic("");
+          } catch (err) {
+            setError(err.message);
+          } finally {
+            setIsLoading(false);
+          }
+        }
+
+        async function openReport(id) {
+          try {
+            const data = await request(`/reports/${id}`);
+            setActiveReport(data);
+          } catch (err) {
+            setError(err.message);
+          }
+        }
+
+        async function deleteReport(id) {
+          if (!window.confirm("Delete this report?")) return;
+          try {
+            await request(`/reports/${id}`, "DELETE");
+            if (activeReport && activeReport.id === id) setActiveReport(null);
+            await fetchReports();
+            setMessage("Report deleted.");
+          } catch (err) {
+            setError(err.message);
+          }
+        }
+
+        async function downloadPdf(id) {
+          const tokenValue = localStorage.getItem("bizsense_token");
+          const fallbackBases = [apiBase, ...API_BASE_CANDIDATES.filter((base) => base !== apiBase)].filter(Boolean);
+
+          for (const base of fallbackBases) {
+            try {
+              const resp = await fetch(`${base}/reports/${id}/pdf`, {
+                method: "GET",
+                mode: "cors",
+                headers: tokenValue ? { Authorization: `Bearer ${tokenValue}` } : {}
+              });
+              if (!resp.ok) {
+                const errorJson = await resp.json().catch(() => ({}));
+                throw new Error(errorJson.detail || "Failed to generate PDF");
+              }
+              const blob = await resp.blob();
+              const url = window.URL.createObjectURL(blob);
+              const link = document.createElement("a");
+              link.href = url;
+              link.download = `bizsense_report_${id}.pdf`;
+              document.body.appendChild(link);
+              link.click();
+              link.remove();
+              window.URL.revokeObjectURL(url);
+              if (base !== apiBase) setApiBase(base);
+              return;
+            } catch (err) {}
+          }
+          setError("Failed to download PDF report. Please retry.");
+        }
+
+        function logout() {
+          localStorage.removeItem("bizsense_token");
+          setToken("");
+          setReports([]);
+          setActiveReport(null);
+          setView("login");
+        }
+
+        const AuthCard = (
+          <div className="max-w-md mx-auto bg-white/95 backdrop-blur-xl border border-white/40 rounded-3xl shadow-[0_20px_80px_rgba(15,23,42,0.35)] p-8 sm:p-10">
+            <div className="text-center mb-7">
+              <div className="inline-flex px-3 py-1 rounded-full bg-blue-50 text-blue-700 text-xs font-semibold tracking-wide mb-4">
+                BUSINESS INTELLIGENCE
+              </div>
+              <h1 className="text-4xl font-extrabold text-slate-900 mb-2 tracking-tight">BizSense</h1>
+              <p className="text-slate-600">Strategic AI reports for smarter business decisions</p>
+            </div>
+            <div className="flex items-center justify-center gap-5 text-slate-500 text-xs mb-6">
+              <span className="inline-flex items-center gap-1.5">
+                <Icon className="w-3.5 h-3.5"><path d="M12 3v18M3 12h18" /></Icon>
+                AI Insights
+              </span>
+              <span className="inline-flex items-center gap-1.5">
+                <Icon className="w-3.5 h-3.5"><path d="M4 19h16M4 5h16M8 9h8M8 15h8" /></Icon>
+                SWOT Ready
+              </span>
+            </div>
+
+            <form onSubmit={view === "signup" ? handleSignup : handleLogin} className="space-y-4">
+              {view === "signup" && (
+                <input
+                  className="w-full border border-slate-200 rounded-xl px-4 py-3 bg-white/80 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  placeholder="Full Name"
+                  value={authForm.name}
+                  onChange={(e) => setAuthForm({ ...authForm, name: e.target.value })}
+                  required
+                />
+              )}
+              <input
+                type="email"
+                className="w-full border border-slate-200 rounded-xl px-4 py-3 bg-white/80 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Email"
+                value={authForm.email}
+                onChange={(e) => setAuthForm({ ...authForm, email: e.target.value })}
+                required
+              />
+              <input
+                type="password"
+                className="w-full border border-slate-200 rounded-xl px-4 py-3 bg-white/80 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                placeholder="Password"
+                value={authForm.password}
+                onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })}
+                required
+              />
+              <button
+                className="w-full bg-gradient-to-r from-blue-700 to-cyan-600 hover:from-blue-800 hover:to-cyan-700 text-white font-semibold rounded-xl py-3 transition disabled:opacity-50 shadow-lg shadow-blue-700/30"
+                disabled={isLoading}
+              >
+                {isLoading ? "Please wait..." : view === "signup" ? "Create Account" : "Login"}
+              </button>
+            </form>
+
+            <button
+              className="mt-4 w-full text-blue-700 font-medium hover:underline"
+              onClick={() => {
+                setError("");
+                setMessage("");
+                setView(view === "signup" ? "login" : "signup");
+              }}
+            >
+              {view === "signup" ? "Already have an account? Login" : "Need an account? Sign up"}
+            </button>
+          </div>
+        );
+
+        const Dashboard = (
+          <div className="max-w-7xl mx-auto p-4 sm:p-8">
+            <div className="bg-slate-950/30 border border-white/20 rounded-2xl px-4 py-3 mb-4 text-slate-100 backdrop-blur">
+              <div className="flex items-center justify-between gap-3">
+                <div className="inline-flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-blue-500/20 text-blue-200 flex items-center justify-center">
+                    <Icon className="w-4 h-4"><path d="M3 20h18M6 16V8m6 8V4m6 12v-6" /></Icon>
+                  </div>
+                  <span className="font-semibold tracking-wide text-sm">BizSense Platform</span>
+                </div>
+                <div className="inline-flex items-center gap-2 text-xs text-slate-300">
+                  <Icon className="w-3.5 h-3.5"><circle cx="12" cy="12" r="9" /><path d="M8 12h8M12 8v8" /></Icon>
+                  {view === "report" ? "Report Viewer" : "Dashboard"}
+                </div>
+              </div>
+            </div>
+            <div className="bg-white/95 backdrop-blur border border-white/40 rounded-3xl shadow-[0_16px_64px_rgba(2,6,23,0.35)] p-5 sm:p-7 mb-6 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">BizSense Dashboard</h2>
+                <p className="text-slate-600 mt-1">Generate market intelligence and strategic reports.</p>
+              </div>
+              <button onClick={logout} className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 font-medium inline-flex items-center gap-2">
+                <Icon><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" /><path d="M16 17l5-5-5-5" /><path d="M21 12H9" /></Icon>
+                Logout
+              </button>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
+              <div className="lg:col-span-2 bg-white/95 backdrop-blur border border-white/40 rounded-3xl shadow-[0_16px_64px_rgba(2,6,23,0.25)] p-6 sm:p-7">
+                <h3 className="text-xl font-bold text-slate-900 mb-1">Run New Analysis</h3>
+                <p className="text-slate-500 text-sm mb-4">Enter a market, product, or industry topic and generate a comprehensive intelligence report.</p>
+                <form onSubmit={runAnalysis} className="space-y-3">
+                  <input
+                    className="w-full border border-slate-200 rounded-xl px-4 py-3 focus:outline-none focus:ring-2 focus:ring-blue-500"
+                    placeholder="Enter topic (e.g., EV charging business in India)"
+                    value={analysisTopic}
+                    onChange={(e) => setAnalysisTopic(e.target.value)}
+                    required
+                  />
+                  <button
+                    className="bg-gradient-to-r from-blue-700 to-cyan-600 text-white px-5 py-2.5 rounded-xl hover:from-blue-800 hover:to-cyan-700 disabled:opacity-50 shadow-lg shadow-blue-700/25 font-medium inline-flex items-center gap-2"
+                    disabled={isLoading}
+                  >
+                    <Icon><path d="M12 20V4M5 11l7-7 7 7" /></Icon>
+                    {isLoading ? "Analyzing..." : "Analyze with BizSense"}
+                  </button>
+                </form>
+                {agentStage && <p className="mt-4 text-sm text-blue-700 font-medium">{agentStage}</p>}
+              </div>
+
+              <div className="bg-white/95 backdrop-blur border border-white/40 rounded-3xl shadow-[0_16px_64px_rgba(2,6,23,0.25)] p-6">
+                <h3 className="text-xl font-bold text-slate-900 mb-3">Report History</h3>
+                <div className="space-y-3 max-h-96 overflow-y-auto pr-1">
+                  {reports.length === 0 && <p className="text-slate-500">No reports yet.</p>}
+                  {reports.map((report) => (
+                    <div key={report.id} className="border border-slate-200 rounded-xl p-4 bg-white">
+                      <p className="font-medium text-slate-800">{report.topic}</p>
+                      <p className="text-xs text-slate-500 mb-2">
+                        {new Date(report.created_at).toLocaleString()}
+                      </p>
+                      <div className="flex gap-2 flex-wrap">
+                        <button
+                          onClick={() => {
+                            openReport(report.id);
+                            setView("report");
+                          }}
+                          className="text-sm px-3 py-1.5 bg-slate-900 text-white rounded-lg inline-flex items-center gap-1.5"
+                        >
+                          <Icon className="w-3.5 h-3.5"><path d="M2 12s4-6 10-6 10 6 10 6-4 6-10 6-10-6-10-6Z" /><circle cx="12" cy="12" r="3" /></Icon>
+                          Open
+                        </button>
+                        <button
+                          onClick={() => deleteReport(report.id)}
+                          className="text-sm px-3 py-1.5 bg-slate-100 rounded-lg inline-flex items-center gap-1.5"
+                        >
+                          <Icon className="w-3.5 h-3.5"><path d="M3 6h18M8 6V4h8v2M6 6l1 14h10l1-14" /></Icon>
+                          Delete
+                        </button>
+                        <button
+                          onClick={() => downloadPdf(report.id)}
+                          className="text-sm px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg inline-flex items-center gap-1.5"
+                        >
+                          <Icon className="w-3.5 h-3.5"><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></Icon>
+                          PDF
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+
+        const ReportViewer = (
+          <div className="max-w-6xl mx-auto p-4 sm:p-8">
+            <div className="bg-slate-950/30 border border-white/20 rounded-2xl px-4 py-3 mb-4 text-slate-100 backdrop-blur">
+              <div className="flex items-center justify-between gap-3">
+                <div className="inline-flex items-center gap-2">
+                  <div className="w-7 h-7 rounded-lg bg-cyan-500/20 text-cyan-200 flex items-center justify-center">
+                    <Icon className="w-4 h-4"><path d="M4 5h16v14H4z" /><path d="M8 9h8M8 13h8M8 17h5" /></Icon>
+                  </div>
+                  <span className="font-semibold tracking-wide text-sm">BizSense Platform</span>
+                </div>
+                <div className="inline-flex items-center gap-2 text-xs text-slate-300">
+                  <Icon className="w-3.5 h-3.5"><path d="M4 19h16M8 5h8M6 9h12M6 13h10" /></Icon>
+                  Report Viewer
+                </div>
+              </div>
+            </div>
+            <div className="bg-white/95 backdrop-blur border border-white/40 rounded-3xl shadow-[0_16px_64px_rgba(2,6,23,0.30)] p-6 sm:p-7">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-5">
+                <h2 className="text-3xl font-extrabold text-slate-900 tracking-tight">BizSense Report Viewer</h2>
+                <button onClick={() => setView("dashboard")} className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 inline-flex items-center gap-2">
+                  <Icon><path d="M15 18l-6-6 6-6" /></Icon>
+                  Back to Dashboard
+                </button>
+              </div>
+              {!activeReport && <p className="text-slate-500">Select a report from dashboard history.</p>}
+              {activeReport && (
+                <div>
+                  <div className="flex items-center justify-between gap-3 mb-2">
+                    <h3 className="text-xl font-semibold">{activeReport.topic}</h3>
+                    <button
+                      onClick={() => downloadPdf(activeReport.id)}
+                      className="px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg text-sm font-medium inline-flex items-center gap-1.5"
+                    >
+                      <Icon className="w-3.5 h-3.5"><path d="M12 3v12M7 10l5 5 5-5M5 21h14" /></Icon>
+                      Download PDF
+                    </button>
+                  </div>
+                  <p className="text-xs text-slate-500 mb-4">
+                    Generated: {new Date(activeReport.created_at).toLocaleString()}
+                  </p>
+                  <article className="max-w-none whitespace-pre-wrap text-slate-700 leading-7 border border-slate-200 rounded-2xl p-5 bg-white">
+                    {activeReport.report_content}
+                  </article>
+                </div>
+              )}
+            </div>
+          </div>
+        );
+
+        return (
+          <main className="min-h-screen py-8 sm:py-12 px-3 sm:px-6">
+            <div className="w-full">
+              {apiBase && (
+                <div className="max-w-5xl mx-auto mb-4 bg-blue-50/95 text-blue-700 px-4 py-3 rounded-xl text-sm border border-blue-100">
+                  Connected API: {apiBase}
+                </div>
+              )}
+              {error && (
+                <div className="max-w-5xl mx-auto mb-4 bg-red-50/95 text-red-700 px-4 py-3 rounded-xl border border-red-100">{error}</div>
+              )}
+              {message && (
+                <div className="max-w-5xl mx-auto mb-4 bg-emerald-50/95 text-emerald-700 px-4 py-3 rounded-xl border border-emerald-100">
+                  {message}
+                </div>
+              )}
+              {!isAuthenticated ? AuthCard : view === "report" ? ReportViewer : Dashboard}
+            </div>
+          </main>
+        );
+      }
+
+      ReactDOM.createRoot(document.getElementById("root")).render(<BizSenseApp />);
+    </script>
+  </body>
+</html>
