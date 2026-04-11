@@ -30,14 +30,6 @@
 
     <script type="text/babel">
       const { useEffect, useMemo, useState } = React;
-      const API_BASE_CANDIDATES = [
-        "http://[::1]:8001",
-        "http://127.0.0.1:8001",
-        "http://localhost:8001",
-        "http://[::1]:8000",
-        "http://127.0.0.1:8000",
-        "http://localhost:8000"
-      ];
 
       function Icon({ children, className = "w-4 h-4" }) {
         return (
@@ -67,7 +59,7 @@
         const [error, setError] = useState("");
         const [isLoading, setIsLoading] = useState(false);
         const [agentStage, setAgentStage] = useState("");
-        const [apiBase, setApiBase] = useState("");
+        const [apiReady, setApiReady] = useState(false);
 
         const isAuthenticated = useMemo(() => Boolean(token), [token]);
 
@@ -80,52 +72,35 @@
             fetchReports();
             setView("dashboard");
           }
-        }, [isAuthenticated, apiBase]);
+        }, [isAuthenticated, apiReady]);
 
         async function detectApiBase() {
-          for (const base of API_BASE_CANDIDATES) {
-            try {
-              const resp = await fetch(`${base}/health`, { method: "GET", mode: "cors" });
-              if (resp.ok) {
-                setApiBase(base);
-                return;
-              }
-            } catch (err) {}
-          }
-          setError("Backend API not reachable. Start FastAPI and make sure port 8000/8001 is available.");
+          const base = window.location.origin;
+          try {
+            const resp = await fetch(`${base}/health`, { method: "GET", mode: "cors" });
+            if (resp.ok) {
+              setApiReady(true);
+              return;
+            }
+          } catch (err) {}
+          setError("Backend API not reachable. Ensure the API is served at the same origin as this page.");
         }
 
         async function request(path, method = "GET", body = null, auth = true) {
+          const base = window.location.origin;
           const headers = { "Content-Type": "application/json" };
           if (auth && token) headers["Authorization"] = `Bearer ${token}`;
 
-          const fallbackBases = [
-            apiBase,
-            ...API_BASE_CANDIDATES.filter((base) => base !== apiBase)
-          ].filter(Boolean);
-
-          let response = null;
-          let lastError = null;
-
-          for (const base of fallbackBases) {
-            try {
-              response = await fetch(`${base}${path}`, {
-                method,
-                mode: "cors",
-                headers,
-                body: body ? JSON.stringify(body) : undefined
-              });
-              if (base !== apiBase) setApiBase(base);
-              break;
-            } catch (err) {
-              lastError = err;
-            }
-          }
-
-          if (!response) {
-            throw new Error(
-              `Unable to reach backend API. Tried: ${fallbackBases.join(", ")}. Ensure FastAPI is running.`
-            );
+          let response;
+          try {
+            response = await fetch(`${base}${path}`, {
+              method,
+              mode: "cors",
+              headers,
+              body: body ? JSON.stringify(body) : undefined
+            });
+          } catch (err) {
+            throw new Error(`Unable to reach backend API at ${base}. Ensure the server is running.`);
           }
 
           const data = await response.json().catch(() => ({}));
@@ -241,33 +216,29 @@
 
         async function downloadPdf(id) {
           const tokenValue = localStorage.getItem("bizsense_token");
-          const fallbackBases = [apiBase, ...API_BASE_CANDIDATES.filter((base) => base !== apiBase)].filter(Boolean);
-
-          for (const base of fallbackBases) {
-            try {
-              const resp = await fetch(`${base}/reports/${id}/pdf`, {
-                method: "GET",
-                mode: "cors",
-                headers: tokenValue ? { Authorization: `Bearer ${tokenValue}` } : {}
-              });
-              if (!resp.ok) {
-                const errorJson = await resp.json().catch(() => ({}));
-                throw new Error(errorJson.detail || "Failed to generate PDF");
-              }
-              const blob = await resp.blob();
-              const url = window.URL.createObjectURL(blob);
-              const link = document.createElement("a");
-              link.href = url;
-              link.download = `bizsense_report_${id}.pdf`;
-              document.body.appendChild(link);
-              link.click();
-              link.remove();
-              window.URL.revokeObjectURL(url);
-              if (base !== apiBase) setApiBase(base);
-              return;
-            } catch (err) {}
+          const base = window.location.origin;
+          try {
+            const resp = await fetch(`${base}/reports/${id}/pdf`, {
+              method: "GET",
+              mode: "cors",
+              headers: tokenValue ? { Authorization: `Bearer ${tokenValue}` } : {}
+            });
+            if (!resp.ok) {
+              const errorJson = await resp.json().catch(() => ({}));
+              throw new Error(errorJson.detail || "Failed to generate PDF");
+            }
+            const blob = await resp.blob();
+            const url = window.URL.createObjectURL(blob);
+            const link = document.createElement("a");
+            link.href = url;
+            link.download = `bizsense_report_${id}.pdf`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            window.URL.revokeObjectURL(url);
+          } catch (err) {
+            setError(err.message || "Failed to download PDF report. Please retry.");
           }
-          setError("Failed to download PDF report. Please retry.");
         }
 
         function logout() {
@@ -491,9 +462,9 @@
         return (
           <main className="min-h-screen py-8 sm:py-12 px-3 sm:px-6">
             <div className="w-full">
-              {apiBase && (
+              {apiReady && (
                 <div className="max-w-5xl mx-auto mb-4 bg-blue-50/95 text-blue-700 px-4 py-3 rounded-xl text-sm border border-blue-100">
-                  Connected API: {apiBase}
+                  Connected API: {window.location.origin}
                 </div>
               )}
               {error && (

@@ -1,9 +1,11 @@
 from io import BytesIO
+from pathlib import Path
 from typing import List
 
 from fastapi import Depends, FastAPI, HTTPException, status
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import HTMLResponse, StreamingResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, EmailStr, Field
 from reportlab.lib.pagesizes import LETTER
 from reportlab.lib.styles import getSampleStyleSheet
@@ -14,6 +16,9 @@ from auth import create_access_token, get_current_user, hash_password, verify_pa
 from database import Base, engine, get_db
 from graph import build_bizsense_graph
 from models import Report, User
+
+BASE_DIR = Path(__file__).resolve().parent
+FRONTEND_DIR = BASE_DIR / "frontend"
 
 app = FastAPI(title="BizSense API", version="1.0.0")
 graph = build_bizsense_graph()
@@ -221,3 +226,15 @@ def delete_report(
     db.delete(report)
     db.commit()
     return {"message": "Report deleted successfully"}
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def serve_frontend_root():
+    index_path = FRONTEND_DIR / "index.html"
+    if not index_path.is_file():
+        raise HTTPException(status_code=404, detail="Frontend index.html not found")
+    return HTMLResponse(content=index_path.read_text(encoding="utf-8"))
+
+
+# Serve any other files in `frontend/` (e.g. favicon, local assets) at /static/...
+app.mount("/static", StaticFiles(directory=str(FRONTEND_DIR)), name="frontend_static")
